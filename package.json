@@ -1,0 +1,10 @@
+{
+    "name": "ai-meditation-api",
+    "version": "1.0.0",
+    "type": "module",
+    "dependencies": {
+      "fastify": "^4.27.0",
+      "openai": "^4.0.0"
+    }
+  }
+  
