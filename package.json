@@ -4,6 +4,7 @@
     "type": "module",
     "dependencies": {
         "fastify": "^4.29.1",
+        "node-fetch": "^3.3.2",
         "openai": "^4.0.0",
         "ws": "^8.18.3"
     }
