@@ -1,124 +1,95 @@
 // index.js
 import Fastify from "fastify";
 import crypto from "crypto";
-import fetch from "node-fetch"; // 用于HTTP请求
+import WebSocket from "ws";
 
-const app = Fastify();
-
-// ======== 讯飞星火 API 账号信息 ========
+// ======== 讯飞星火账号信息 ========
 const APPID = "977737ce";
-const APISecret = "YjFjODU5NGEwNjk0MDQyMWFhMjM1MTNi";
 const APIKey = "c406370db6cb1deb8ba647159ad857c0";
-// ======================================
+const APISecret = "YjFjODU5NGEwNjk0MDQyMWFhMjM1MTNi";
+// ==================================
 
-// 🔒 生成鉴权签名
-function getSignature(host, date, path = "/v1.1/chat") {
-  const signatureOrigin = `host: ${host}\ndate: ${date}\nPOST ${path} HTTP/1.1`;
+// ✅ 生成鉴权URL
+function getAuthUrl(host = "spark-api.xf-yun.com", path = "/v1/x1") {
+  const date = new Date().toUTCString();
+  const signatureOrigin = `host: ${host}\ndate: ${date}\nGET ${path} HTTP/1.1`;
   const signatureSha = crypto
     .createHmac("sha256", APISecret)
     .update(signatureOrigin)
     .digest("base64");
   const authorizationOrigin = `api_key="${APIKey}", algorithm="hmac-sha256", headers="host date request-line", signature="${signatureSha}"`;
   const authorization = Buffer.from(authorizationOrigin).toString("base64");
-  return { authorization };
+  const params = new URLSearchParams({ authorization, date, host });
+  return `wss://${host}${path}?${params.toString()}`;
 }
 
-// 🧾 构建请求头
-function buildHeaders(host, path = "/v1.1/chat") {
-  const date = new Date().toUTCString();
-  const { authorization } = getSignature(host, date, path);
-  return {
-    Authorization: authorization,
-    Host: host,
-    Date: date,
-    "Content-Type": "application/json",
-  };
-}
+// ✅ 调用讯飞星火接口
+function callXunfei(prompt) {
+  return new Promise((resolve, reject) => {
+    const wsUrl = getAuthUrl();
+    const ws = new WebSocket(wsUrl);
+    let result = "";
 
-
-
-async function callXunfei(prompt) {
-    const host = "spark-api.xf-yun.com";
-    const url = `https://${host}/v1.1/chat`;
-    const headers = buildHeaders(host);
-  
-    const body = {
-      header: {
-        app_id: APPID,
-        uid: "vercel_user",
-      },
-      parameter: {
-        chat: {
-          domain: "x1",
-          temperature: 0.6,
-          max_tokens: 1024,
+    ws.on("open", () => {
+      const body = {
+        header: { app_id: APPID, uid: "vercel_user" },
+        parameter: {
+          chat: { domain: "x1", temperature: 0.6, max_tokens: 1024 },
         },
-      },
-      payload: {
-        message: {
-          text: [{ role: "user", content: prompt }],
+        payload: {
+          message: { text: [{ role: "user", content: prompt }] },
         },
-      },
-    };
-  
-    const res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
+      };
+      ws.send(JSON.stringify(body));
     });
-  
-    const raw = await res.text();
-  
-    // 如果不是200，直接抛出完整内容
-    if (!res.ok) {
-      throw new Error(`HTTP错误：${res.status} - ${res.statusText}，响应：${raw}`);
-    }
-  
-    // ✅ 强制把讯飞返回内容写入错误日志，以便Vercel显示
-    if (!raw.includes('"code":0')) {
-      throw new Error("讯飞返回：" + raw);
-    }
-  
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch (e) {
-      throw new Error("讯飞返回的不是有效 JSON：" + raw.slice(0, 200));
-    }
-  
-    const content =
-      data?.payload?.choices?.text?.[0]?.content ||
-      data?.payload?.choices?.[0]?.content ||
-      "（无内容返回）";
-  
-    return content;
-  }
 
-  
-// 🧘‍♀️ 冥想生成接口
+    ws.on("message", (msg) => {
+      const data = JSON.parse(msg);
+      if (data?.header?.code !== 0) {
+        reject(new Error("讯飞返回错误: " + JSON.stringify(data.header)));
+        ws.close();
+        return;
+      }
+
+      const texts = data?.payload?.choices?.text || [];
+      for (const t of texts) {
+        if (t.content) result += t.content;
+      }
+
+      if (data?.header?.status === 2) {
+        ws.close();
+        resolve(result.trim());
+      }
+    });
+
+    ws.on("error", (err) => reject(err));
+  });
+}
+
+// ✅ Fastify 实例
+const app = Fastify();
+
 app.post("/generate", async (req, reply) => {
-  const { duration = 5, purpose = "冥想", style = "放松身体" } = req.body;
-
-  const prompt = `请用温柔的语气，生成一段约 ${duration} 分钟的冥想引导词。
-主题：${purpose}，风格：${style}。`;
+  const { duration = 5, purpose = "冥想", style = "放松身体" } = req.body || {};
+  const prompt = `请用温柔的语气，生成一段约 ${duration} 分钟的冥想引导词。\n主题：${purpose}，风格：${style}。`;
 
   try {
     const text = await callXunfei(prompt);
     reply.send({ text });
   } catch (err) {
-    console.error("❌ 讯飞调用错误：", err);
+    console.error("❌ 调用讯飞错误：", err);
     reply.code(500).send({ error: err.message });
   }
 });
 
-// ✅ 本地运行（开发用）
+// ✅ 本地运行
 if (process.env.NODE_ENV !== "production") {
   app.listen({ port: 3000 }, () => {
     console.log("✅ 本地运行：http://localhost:3000");
   });
 }
 
-// ✅ 兼容 Vercel Serverless 的导出
+// ✅ 兼容 Vercel Serverless 导出
 export default async function handler(req, res) {
   await app.ready();
   app.server.emit("request", req, res);
