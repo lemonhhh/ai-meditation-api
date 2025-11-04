@@ -1,46 +1,25 @@
-// index.js (测试版：读取 public 文件，返回公网链接)
+// index.js (测试版：不调用AI；直接返回公网静态文件URL)
 import Fastify from "fastify";
-import fs from "fs";
-import path from "path";
 
 const app = Fastify();
 
-// 你的部署基础 URL（改成你的 Vercel 地址）
-const BASE_URL = "https://ai-meditation-api.vercel.app";
+// 自动识别 Vercel 线上域名，否则本地开发用 localhost
+const BASE_URL =
+  process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : "http://localhost:3000";
 
-// ========= /tts =========
-// 简单测试接口，返回固定音频文件信息
+// /tts：返回音频 URL（测试用）
 app.post("/tts", async (req, reply) => {
-  const mp3Path = path.resolve("./public/meditation_full.mp3");
-  if (!fs.existsSync(mp3Path)) {
-    return reply
-      .code(404)
-      .send({ error: "音频文件不存在，请先将 meditation_full.mp3 放到 public 目录" });
-  }
-
   reply.send({
     message: "测试模式：返回公网音频文件",
     audio_url: `${BASE_URL}/meditation_full.mp3`,
   });
 });
 
-// ========= /generateFull =========
-// 模拟 AI 生成 + TTS 逻辑，直接读取 public 文件并返回公网可访问链接
+// /generateFull：返回文本/音频 URL + 预览（预览这里不再读文件，给个固定提示）
 app.post("/generateFull", async (req, reply) => {
-  const txtPath = path.resolve("./public/meditation_full.txt");
-  const mp3Path = path.resolve("./public/meditation_full.mp3");
-
-  // 检查文件是否存在
-  if (!fs.existsSync(txtPath) || !fs.existsSync(mp3Path)) {
-    return reply.code(404).send({
-      error: "public 目录下缺少 meditation_full.txt 或 meditation_full.mp3",
-    });
-  }
-
-  // 读取文本
-  const text = fs.readFileSync(txtPath, "utf8");
-
-  // ✅ 返回公网可访问链接（iOS App 直接使用）
+  // 这里不再用 fs 检查，只返回可公网访问的 URL
   reply.send({
     message: "测试模式：返回公网文件",
     duration: 5,
@@ -48,11 +27,21 @@ app.post("/generateFull", async (req, reply) => {
     style: "温柔舒缓",
     text_url: `${BASE_URL}/meditation_full.txt`,
     audio_url: `${BASE_URL}/meditation_full.mp3`,
-    preview: text.slice(0, 120) + (text.length > 120 ? "..." : ""),
+    // 预览：如果你想展示真实开头文本，可在本地模式时读取文件；线上建议直接让 iOS 端请求 text_url 获取内容
+    preview: "（测试模式）请在客户端用 text_url 拉取真实文案内容。",
   });
 });
 
-// ========= 启动服务 =========
-app.listen({ port: 3000 }, () => {
-  console.log("✅ 本地测试服务已启动：http://localhost:3000");
-});
+// 本地开发时开启；Vercel 会自动托管为 Serverless Function（不用手动 listen）
+if (!process.env.VERCEL) {
+  app.listen({ port: 3000 }, () => {
+    console.log("✅ 本地测试服务已启动：http://localhost:3000");
+    console.log(`静态文件可访问: ${BASE_URL}/meditation_full.mp3`);
+  });
+}
+
+export default async function handler(req, res) {
+  // 让 Vercel 的 Node 适配 Fastify
+  await app.ready();
+  app.server.emit("request", req, res);
+}
