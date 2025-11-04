@@ -1,96 +1,46 @@
-// index.js
+// index.js (测试版：不调用AI，只返回本地文件)
 import Fastify from "fastify";
-import crypto from "crypto";
-import WebSocket from "ws";
+import fs from "fs";
+import path from "path";
 
-// ======== 讯飞星火账号信息 ========
-const APPID = "977737ce";
-const APIKey = "c406370db6cb1deb8ba647159ad857c0";
-const APISecret = "YjFjODU5NGEwNjk0MDQyMWFhMjM1MTNi";
-// ==================================
-
-// ✅ 生成鉴权URL
-function getAuthUrl(host = "spark-api.xf-yun.com", path = "/v1/x1") {
-  const date = new Date().toUTCString();
-  const signatureOrigin = `host: ${host}\ndate: ${date}\nGET ${path} HTTP/1.1`;
-  const signatureSha = crypto
-    .createHmac("sha256", APISecret)
-    .update(signatureOrigin)
-    .digest("base64");
-  const authorizationOrigin = `api_key="${APIKey}", algorithm="hmac-sha256", headers="host date request-line", signature="${signatureSha}"`;
-  const authorization = Buffer.from(authorizationOrigin).toString("base64");
-  const params = new URLSearchParams({ authorization, date, host });
-  return `wss://${host}${path}?${params.toString()}`;
-}
-
-// ✅ 调用讯飞星火接口
-function callXunfei(prompt) {
-  return new Promise((resolve, reject) => {
-    const wsUrl = getAuthUrl();
-    const ws = new WebSocket(wsUrl);
-    let result = "";
-
-    ws.on("open", () => {
-      const body = {
-        header: { app_id: APPID, uid: "vercel_user" },
-        parameter: {
-          chat: { domain: "x1", temperature: 0.6, max_tokens: 1024 },
-        },
-        payload: {
-          message: { text: [{ role: "user", content: prompt }] },
-        },
-      };
-      ws.send(JSON.stringify(body));
-    });
-
-    ws.on("message", (msg) => {
-      const data = JSON.parse(msg);
-      if (data?.header?.code !== 0) {
-        reject(new Error("讯飞返回错误: " + JSON.stringify(data.header)));
-        ws.close();
-        return;
-      }
-
-      const texts = data?.payload?.choices?.text || [];
-      for (const t of texts) {
-        if (t.content) result += t.content;
-      }
-
-      if (data?.header?.status === 2) {
-        ws.close();
-        resolve(result.trim());
-      }
-    });
-
-    ws.on("error", (err) => reject(err));
-  });
-}
-
-// ✅ Fastify 实例
 const app = Fastify();
 
-app.post("/generate", async (req, reply) => {
-  const { duration = 5, purpose = "冥想", style = "放松身体" } = req.body || {};
-  const prompt = `请用温柔的语气，生成一段约 ${duration} 分钟的冥想引导词。\n主题：${purpose}，风格：${style}。`;
-
-  try {
-    const text = await callXunfei(prompt);
-    reply.send({ text });
-  } catch (err) {
-    console.error("❌ 调用讯飞错误：", err);
-    reply.code(500).send({ error: err.message });
+// 纯文本 → 语音（直接返回已保存的mp3路径）
+app.post("/tts", async (req, reply) => {
+  const mp3Path = path.resolve("./meditation_full.mp3");
+  if (!fs.existsSync(mp3Path)) {
+    return reply.code(404).send({ error: "音频文件不存在，请先生成 meditation_full.mp3" });
   }
+  reply.send({
+    message: "返回本地测试音频",
+    audio_file: mp3Path,
+  });
 });
 
-// ✅ 本地运行
-if (process.env.NODE_ENV !== "production") {
-  app.listen({ port: 3000 }, () => {
-    console.log("✅ 本地运行：http://localhost:3000");
-  });
-}
+// 自动生成文案 → 合成语音（测试模式：直接读取本地文件）
+app.post("/generateFull", async (req, reply) => {
+  const txtPath = path.resolve("./meditation_full.txt");
+  const mp3Path = path.resolve("./meditation_full.mp3");
 
-// ✅ 兼容 Vercel Serverless 导出
-export default async function handler(req, res) {
-  await app.ready();
-  app.server.emit("request", req, res);
-}
+  if (!fs.existsSync(txtPath) || !fs.existsSync(mp3Path)) {
+    return reply.code(404).send({
+      error: "本地文件不存在，请先生成 meditation_full.txt 与 meditation_full.mp3",
+    });
+  }
+
+  const text = fs.readFileSync(txtPath, "utf8");
+
+  reply.send({
+    message: "测试模式：返回本地文件",
+    duration: 5,
+    purpose: "助眠",
+    style: "温柔舒缓",
+    text_file: txtPath,
+    audio_file: mp3Path,
+    preview: text.slice(0, 120) + (text.length > 120 ? "..." : ""),
+  });
+});
+
+app.listen({ port: 3000 }, () => {
+  console.log("✅ 本地测试服务启动：http://localhost:3000");
+});
